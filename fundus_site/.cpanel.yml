@@ -1,0 +1,7 @@
+---
+deployment:
+  tasks:
+    - npm ci
+    - npm run build
+    - /bin/mkdir -p "$HOME/fundusec.com"
+    - /bin/cp -R dist/. "$HOME/fundusec.com/"
