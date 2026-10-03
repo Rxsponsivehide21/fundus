@@ -1,0 +1,7 @@
+---
+deployment:
+  tasks:
+    - npm ci --prefix fundus_site
+    - npm run build --prefix fundus_site
+    - /bin/mkdir -p "$HOME/fundusec.com"
+    - /bin/cp -R fundus_site/dist/. "$HOME/fundusec.com/"
