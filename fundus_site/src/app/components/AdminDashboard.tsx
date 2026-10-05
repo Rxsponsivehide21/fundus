@@ -133,23 +133,19 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
       });
       setError('');
       await loadMessages(selectedSession);
-      // After replying, update the last message so badge clears
-      setLastMessages((prev) => ({
-        ...prev,
-        [selectedSession]: { id: Date.now().toString(), text, sender: 'agent', timestamp: new Date().toISOString() },
-      }));
+      setPendingSessions((prev) => {
+        const next = new Set(prev);
+        next.delete(selectedSession);
+        return next;
+      });
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Reply could not be sent.');
     } finally {
       setSending(false);
     }
   };
-      setPendingSessions((prev) => {
-        const next = new Set(prev);
-        next.delete(selectedSession);
-        return next;
-      });
 
+  const isPending = (email: string) => pendingSessions.has(email);
   const pendingCount = sessions.filter(isPending).length;
   const fmt = (ts: string) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 

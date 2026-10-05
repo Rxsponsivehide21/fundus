@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>FundusEC — Owner Dashboard</title>
+<link rel="icon" type="image/jpeg" href="assets/favicon.jpeg">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div class="top">
+  <div class="logo"><img src="assets/logo.jpeg" alt=""><div>FundusEC<br><small style="color:#6b7280;font-weight:400;font-size:.75rem">Owner Dashboard</small></div></div>
+  <button class="btn ghost" id="out">Sign out</button>
+</div>
+<div class="adm">
+  <aside>
+    <div style="display:grid;gap:.5rem;margin-bottom:1.25rem">
+      <div class="glass" style="padding:.7rem;border-radius:.75rem"><b id="s-sess">0</b> <small style="color:#6b7280">Chat Sessions</small></div>
+      <div class="glass" style="padding:.7rem;border-radius:.75rem"><b id="s-msgs">0</b> <small style="color:#6b7280">Total Messages</small></div>
+      <div class="glass" style="padding:.7rem;border-radius:.75rem"><b id="s-pend">0</b> <small style="color:#6b7280">Pending Replies</small></div>
+    </div>
+    <div style="font-size:.7rem;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem">Inbox <button id="refresh" style="float:right">⟳</button></div>
+    <div id="list"><p style="color:#4b5563;font-size:.75rem;text-align:center;padding:2rem 0">No customer chats yet</p></div>
+  </aside>
+  <main>
+    <div id="empty" style="flex:1;display:flex;align-items:center;justify-content:center;color:#6b7280;font-size:.875rem">Select a conversation to start replying</div>
+    <div id="panel" style="display:none;flex:1;flex-direction:column;min-height:0">
+      <div style="padding:1rem 1.5rem;border-bottom:1px solid rgba(255,255,255,.07);font-weight:600;font-size:.875rem" id="who"></div>
+      <div class="msgs" id="msgs"></div>
+      <form class="cf" id="rf" style="padding:1rem"><input id="reply" placeholder="Reply..." autocomplete="off"><button>➤</button></form>
+    </div>
+  </main>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/admin.js"></script>
+</body>
+</html>
