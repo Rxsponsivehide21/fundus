@@ -8,10 +8,9 @@ interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSignUpClick?: () => void;
-  onAdminLogin?: () => void;
 }
 
-export function LoginModal({ isOpen, onClose, onSignUpClick, onAdminLogin }: LoginModalProps) {
+export function LoginModal({ isOpen, onClose, onSignUpClick }: LoginModalProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -27,14 +26,6 @@ export function LoginModal({ isOpen, onClose, onSignUpClick, onAdminLogin }: Log
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-
-    // Admin credentials check
-    if (email === 'x1c9' && password === 'x9c1') {
-      handleClose();
-      onAdminLogin?.();
-      setIsLoading(false);
-      return;
-    }
 
     // Validate email format for regular users
     if (!email.includes('@')) {

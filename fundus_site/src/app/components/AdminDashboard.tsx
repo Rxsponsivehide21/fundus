@@ -1,9 +1,29 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { LogOut, MessageSquare, Users, BarChart2, Send, RefreshCw, Inbox } from 'lucide-react';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
+import { supabase } from '../../lib/supabase';
 
 const API = `https://${projectId}.supabase.co/functions/v1/make-server-3f69e9c8`;
-const H = { 'Content-Type': 'application/json', Authorization: `Bearer ${publicAnonKey}` };
+
+async function authorizedFetch(path: string, init: RequestInit = {}) {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Your session has expired. Please sign in again.');
+  const response = await fetch(`${API}${path}`, {
+    ...init,
+    headers: {
+      apikey: publicAnonKey,
+      'Content-Type': 'application/json',
+      ...init.headers,
+      Authorization: `Bearer ${session.access_token}`,
+    },
+  });
+  if (response.status === 401 || response.status === 403) {
+    await supabase.auth.signOut();
+    throw new Error('Admin access is no longer authorized.');
+  }
+  if (!response.ok) throw new Error(`Chat service returned HTTP ${response.status}`);
+  return response;
+}
 
 interface Message {
   id: string;
@@ -18,13 +38,14 @@ interface AdminDashboardProps {
 
 export function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [sessions, setSessions] = useState<string[]>([]);
-  const [lastMessages, setLastMessages] = useState<Record<string, Message | null>>({});
-  const [readSessions, setReadSessions] = useState<Set<string>>(new Set());
+  const [pendingSessions, setPendingSessions] = useState<Set<string>>(new Set());
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [reply, setReply] = useState('');
   const [sending, setSending] = useState(false);
   const [totalMessages, setTotalMessages] = useState(0);
+  const [search, setSearch] = useState('');
+  const [error, setError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scroll = () => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -33,22 +54,22 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
   // Fetch last message for a session to determine pending status
   const fetchLastMessage = useCallback(async (email: string) => {
     try {
-      const res = await fetch(`${API}/chat/messages/${encodeURIComponent(email)}`, { headers: H });
+      const res = await authorizedFetch(`/chat/messages/${encodeURIComponent(email)}`);
       const data = await res.json();
       if (Array.isArray(data.messages) && data.messages.length > 0) {
-        setLastMessages((prev) => ({ ...prev, [email]: data.messages[data.messages.length - 1] }));
         return data.messages.length;
       }
-    } catch {}
+    } catch (error) { setError(error instanceof Error ? error.message : 'Could not load messages.'); }
     return 0;
   }, []);
 
   const loadSessions = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/chat/sessions`, { headers: H });
+      const res = await authorizedFetch('/chat/sessions');
       const data = await res.json();
       const list: string[] = Array.isArray(data.sessions) ? data.sessions : [];
       setSessions(list);
+      setPendingSessions(new Set(Array.isArray(data.pending) ? data.pending : []));
 
       // Fetch last message for each session to compute pending badges
       let total = 0;
@@ -57,21 +78,17 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
         total += count;
       }));
       setTotalMessages(total);
-    } catch {}
+    } catch (error) { setError(error instanceof Error ? error.message : 'Could not load inbox.'); }
   }, [fetchLastMessage]);
 
   const loadMessages = useCallback(async (email: string) => {
     try {
-      const res = await fetch(`${API}/chat/messages/${encodeURIComponent(email)}`, { headers: H });
+      const res = await authorizedFetch(`/chat/messages/${encodeURIComponent(email)}`);
       const data = await res.json();
       if (Array.isArray(data.messages)) {
         setMessages(data.messages);
-        // Update last message for badge
-        if (data.messages.length > 0) {
-          setLastMessages((prev) => ({ ...prev, [email]: data.messages[data.messages.length - 1] }));
-        }
       }
-    } catch {}
+    } catch (error) { setError(error instanceof Error ? error.message : 'Could not load conversation.'); }
   }, []);
 
   // Load sessions on mount + poll every 8s
@@ -91,7 +108,15 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
   const selectSession = (email: string) => {
     setSelectedSession(email);
-    setReadSessions((prev) => new Set(prev).add(email));
+    setPendingSessions((prev) => {
+      const next = new Set(prev);
+      next.delete(email);
+      return next;
+    });
+    void authorizedFetch('/chat/read', {
+      method: 'POST',
+      body: JSON.stringify({ userEmail: email }),
+    }).catch((reason) => setError(reason instanceof Error ? reason.message : 'Could not update conversation status.'));
     loadMessages(email);
   };
 
@@ -102,28 +127,28 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
     const text = reply.trim();
     setReply('');
     try {
-      await fetch(`${API}/chat/reply`, {
+      await authorizedFetch('/chat/reply', {
         method: 'POST',
-        headers: H,
         body: JSON.stringify({ userEmail: selectedSession, text }),
       });
+      setError('');
       await loadMessages(selectedSession);
       // After replying, update the last message so badge clears
       setLastMessages((prev) => ({
         ...prev,
         [selectedSession]: { id: Date.now().toString(), text, sender: 'agent', timestamp: new Date().toISOString() },
       }));
-    } catch {
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Reply could not be sent.');
     } finally {
       setSending(false);
     }
   };
-
-  // A session is pending if: last message is from 'user' AND not currently selected (unread)
-  const isPending = (email: string) => {
-    const last = lastMessages[email];
-    return last?.sender === 'user' && !readSessions.has(email);
-  };
+      setPendingSessions((prev) => {
+        const next = new Set(prev);
+        next.delete(selectedSession);
+        return next;
+      });
 
   const pendingCount = sessions.filter(isPending).length;
   const fmt = (ts: string) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -132,7 +157,7 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
     <div className="min-h-screen bg-zinc-950 flex flex-col">
       {/* Top bar */}
       <header
-        className="flex items-center justify-between px-6 py-4 shrink-0"
+        className="flex items-center justify-between px-5 sm:px-8 py-4 shrink-0"
         style={{
           background: 'rgba(0,0,0,0.8)',
           borderBottom: '1px solid rgba(255,255,255,0.07)',
@@ -144,8 +169,8 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
             <span className="text-white font-bold text-base">F</span>
           </div>
           <div>
-            <div className="text-white font-bold text-sm">FundusEC</div>
-            <div className="text-gray-500 text-xs">Owner Dashboard</div>
+            <div className="text-white font-bold text-sm">FundusEC Support</div>
+            <div className="text-gray-500 text-xs">Admin workspace</div>
           </div>
         </div>
         <button
@@ -157,38 +182,50 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
         </button>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <aside className="w-72 flex flex-col shrink-0" style={{ borderRight: '1px solid rgba(255,255,255,0.07)', background: 'rgba(0,0,0,0.4)' }}>
-          {/* Stats */}
-          <div className="p-4 space-y-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-            <div className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-3">Overview</div>
-            {[
-              { icon: Users, label: 'Chat Sessions', value: sessions.length },
-              { icon: MessageSquare, label: 'Total Messages', value: totalMessages },
-              { icon: BarChart2, label: 'Pending Replies', value: pendingCount },
-            ].map((s) => (
-              <div
-                key={s.label}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-xl"
-                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}
-              >
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'rgba(220,38,38,0.15)' }}>
-                  <s.icon size={15} className="text-red-400" />
-                </div>
-                <div>
-                  <div className="text-white font-bold text-base leading-none">{s.value}</div>
-                  <div className="text-gray-500 text-xs mt-0.5">{s.label}</div>
-                </div>
-              </div>
-            ))}
+      <main className="flex-1 w-full max-w-[1600px] mx-auto px-4 sm:px-7 py-6 sm:py-8 flex flex-col min-h-0">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
+          <div>
+            <div className="text-red-400 text-xs font-semibold uppercase tracking-[.2em] mb-2">Customer care</div>
+            <h1 className="text-white text-2xl sm:text-3xl font-semibold tracking-tight">Messages</h1>
+            <p className="text-gray-500 text-sm mt-1">Manage customer conversations in one place.</p>
           </div>
+          <div className="flex items-center gap-2 text-xs text-gray-500">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" /> Live inbox · refreshes automatically
+          </div>
+        </div>
 
+        <section className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5" aria-label="Support metrics">
+          {[
+            { icon: Users, label: 'Conversations', value: sessions.length, hint: 'Customer threads' },
+            { icon: MessageSquare, label: 'Messages', value: totalMessages, hint: 'Across all conversations' },
+            { icon: BarChart2, label: 'Needs reply', value: pendingCount, hint: 'Waiting for your response' },
+          ].map((metric) => (
+            <div key={metric.label} className="rounded-2xl px-4 py-4 sm:px-5 flex items-center gap-4" style={{ background: 'linear-gradient(135deg, rgba(255,255,255,0.055), rgba(255,255,255,0.025))', border: '1px solid rgba(255,255,255,0.08)' }}>
+              <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'rgba(220,38,38,0.14)', border: '1px solid rgba(239,68,68,0.15)' }}>
+                <metric.icon size={18} className="text-red-400" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-gray-500 text-xs font-medium">{metric.label}</div>
+                <div className="text-white text-2xl font-semibold leading-tight mt-0.5">{metric.value}</div>
+                <div className="text-gray-600 text-[11px] mt-0.5">{metric.hint}</div>
+              </div>
+            </div>
+          ))}
+        </section>
+
+        {error && <div role="alert" className="mb-4 rounded-xl px-4 py-3 text-sm text-red-200" style={{ background: 'rgba(127,29,29,.25)', border: '1px solid rgba(248,113,113,.2)' }}>{error}</div>}
+
+      <div className="flex flex-col md:flex-row flex-1 min-h-[520px] overflow-hidden rounded-2xl" style={{ border: '1px solid rgba(255,255,255,.09)', background: 'rgba(10,10,12,.72)', boxShadow: '0 24px 80px rgba(0,0,0,.25)' }}>
+        {/* Sidebar */}
+        <aside className="w-full md:w-[280px] lg:w-[340px] max-h-[38vh] md:max-h-none flex flex-col shrink-0 border-b md:border-b-0 md:border-r border-white/[.07]" style={{ background: 'rgba(0,0,0,0.22)' }}>
           {/* Session list */}
+          <div className="px-3 pt-4">
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search conversations" aria-label="Search conversations" className="w-full px-3 py-2.5 rounded-xl text-sm text-white placeholder-gray-600 outline-none" style={{ background: 'rgba(255,255,255,.045)', border: '1px solid rgba(255,255,255,.08)' }} />
+          </div>
           <div className="flex-1 overflow-y-auto p-3">
             <div className="flex items-center justify-between mb-3 px-1">
-              <span className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Inbox</span>
-              <button onClick={loadSessions} className="text-gray-600 hover:text-gray-400 transition">
+              <span className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Inbox <span className="text-gray-700">({sessions.length})</span></span>
+              <button onClick={loadSessions} aria-label="Refresh inbox" className="text-gray-600 hover:text-gray-300 transition p-1 rounded-md">
                 <RefreshCw size={13} />
               </button>
             </div>
@@ -199,7 +236,7 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
               </div>
             ) : (
               <div className="space-y-1">
-                {sessions.map((email) => {
+                {sessions.filter((email) => email.toLowerCase().includes(search.trim().toLowerCase())).map((email) => {
                   const pending = isPending(email);
                   const isSelected = selectedSession === email;
                   return (
@@ -244,21 +281,21 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
         </aside>
 
         {/* Chat panel */}
-        <main className="flex-1 flex flex-col overflow-hidden">
+        <section className="flex-1 min-h-[360px] min-w-0 flex flex-col overflow-hidden" aria-label="Selected conversation">
           {!selectedSession ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center p-8">
-              <MessageSquare className="text-gray-700" size={48} />
-              <div className="text-gray-500 text-sm">Select a conversation to start replying</div>
+              <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: 'rgba(255,255,255,.035)', border: '1px solid rgba(255,255,255,.07)' }}><MessageSquare className="text-gray-600" size={26} /></div>
+              <div><div className="text-gray-300 text-sm font-medium">Your inbox is ready</div><div className="text-gray-600 text-xs mt-1">Choose a conversation to view and reply.</div></div>
             </div>
           ) : (
             <>
-              <div className="px-6 py-4 flex items-center gap-3 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)', background: 'rgba(0,0,0,0.3)' }}>
+              <div className="px-5 py-4 flex items-center gap-3 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.07)', background: 'rgba(0,0,0,0.3)' }}>
                 <div className="w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0" style={{ background: 'rgba(220,38,38,0.3)' }}>
                   {selectedSession[0].toUpperCase()}
                 </div>
                 <div>
                   <div className="text-white text-sm font-semibold">{selectedSession}</div>
-                  <div className="text-gray-500 text-xs">{messages.length} messages</div>
+                  <div className="text-gray-500 text-xs">Customer conversation · {messages.length} messages</div>
                 </div>
               </div>
 
@@ -310,8 +347,9 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
               </form>
             </>
           )}
-        </main>
+        </section>
       </div>
+      </main>
     </div>
   );
 }

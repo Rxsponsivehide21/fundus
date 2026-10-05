@@ -13,6 +13,7 @@ import { CustomerCareChat } from './components/CustomerCareChat';
 import { AdminDashboard } from './components/AdminDashboard';
 import { SEO } from './components/SEO';
 import { supabase } from '../lib/supabase';
+import { projectId, publicAnonKey } from '/utils/supabase/info';
 import { Toaster } from 'sonner';
 
 export default function App() {
@@ -21,10 +22,37 @@ export default function App() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [roleCheckFailed, setRoleCheckFailed] = useState(false);
 
   useEffect(() => {
+    let active = true;
+    const verifyAdmin = async (accessToken?: string) => {
+      if (active) setRoleCheckFailed(false);
+      if (!accessToken) {
+        if (active) { setIsAdmin(false); setRoleCheckFailed(false); }
+        return;
+      }
+      try {
+        const response = await fetch(`https://${projectId}.supabase.co/functions/v1/make-server-3f69e9c8/admin/access`, {
+          headers: { apikey: publicAnonKey, Authorization: `Bearer ${accessToken}` },
+        });
+        if (response.status === 403) {
+          if (active) setIsAdmin(false);
+          return;
+        }
+        if (!response.ok) throw new Error(`Role check failed (${response.status})`);
+        if (active) setIsAdmin((await response.json()).allowed === true);
+      } catch {
+        if (active) { setIsAdmin(false); setRoleCheckFailed(true); }
+      }
+    };
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthReady(false);
       setUser(session?.user ?? null);
+      void verifyAdmin(session?.access_token).finally(() => {
+        if (active) setAuthReady(true);
+      });
     });
 
     const init = async () => {
@@ -32,21 +60,28 @@ export default function App() {
       const code = params.get('code');
       if (code) {
         const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-        if (!error && data.session) setUser(data.session.user);
+        if (!error && data.session) {
+          setUser(data.session.user);
+          await verifyAdmin(data.session.access_token);
+        }
         window.history.replaceState({}, document.title, window.location.pathname);
+        setAuthReady(true);
         return;
       }
       const { data: { session } } = await supabase.auth.getSession();
       setUser(session?.user ?? null);
+      await verifyAdmin(session?.access_token);
+      if (active) setAuthReady(true);
     };
 
-    init();
-    return () => subscription.unsubscribe();
+    void init();
+    return () => { active = false; subscription.unsubscribe(); };
   }, []);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setUser(null);
+    setIsAdmin(false);
   };
 
   const handleGetStartedClick = () => {
@@ -54,10 +89,27 @@ export default function App() {
     else setIsRegisterOpen(true);
   };
 
-  // Show admin dashboard if admin is logged in
+  // Do not render customer-facing UI until Supabase and server-side role checks finish.
+  if (!authReady) {
+    return <div className="min-h-screen bg-zinc-950" aria-label="Loading account" />;
+  }
+
+  if (roleCheckFailed) {
+    return (
+      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-6 text-center">
+        <div className="max-w-md">
+          <div className="text-white text-lg font-semibold">Account permissions could not be verified</div>
+          <p className="text-gray-500 text-sm mt-2">For security, the site is unavailable until Supabase access checks are working.</p>
+          <button onClick={handleLogout} className="mt-5 rounded-xl px-4 py-2 text-sm text-white" style={{ background: 'linear-gradient(135deg, #dc2626, #ef4444)' }}>Sign out</button>
+        </div>
+      </div>
+    );
+  }
+
+  // Admins only receive the isolated support dashboard, never the customer site UI.
   if (isAdmin) {
     return (
-      <AdminDashboard onLogout={() => setIsAdmin(false)} />
+      <AdminDashboard onLogout={handleLogout} />
     );
   }
 
@@ -89,7 +141,6 @@ export default function App() {
           isOpen={isLoginOpen}
           onClose={() => setIsLoginOpen(false)}
           onSignUpClick={() => { setIsLoginOpen(false); setIsRegisterOpen(true); }}
-          onAdminLogin={() => setIsAdmin(true)}
         />
         <CustomerCareChat
           isOpen={isChatOpen}

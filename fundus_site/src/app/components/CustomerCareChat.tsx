@@ -2,9 +2,19 @@ import { X, Send, MessageCircle, Loader2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
+import { supabase } from '../../lib/supabase';
 
 const BASE = `https://${projectId}.supabase.co/functions/v1/make-server-3f69e9c8`;
-const H = { 'Content-Type': 'application/json', Authorization: `Bearer ${publicAnonKey}` };
+
+async function getAuthHeaders() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Please sign in to use customer support.');
+  return {
+    apikey: publicAnonKey,
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${session.access_token}`,
+  };
+}
 
 interface Message {
   id: string;
@@ -32,7 +42,7 @@ export function CustomerCareChat({ isOpen, onClose, userEmail }: Props) {
   const fetchMessages = useCallback(async () => {
     if (!userEmail) return;
     try {
-      const res = await fetch(`${BASE}/chat/messages/${encodeURIComponent(userEmail)}`, { headers: H });
+      const res = await fetch(`${BASE}/chat/messages/${encodeURIComponent(userEmail)}`, { headers: await getAuthHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (Array.isArray(data.messages)) {
@@ -75,8 +85,8 @@ export function CustomerCareChat({ isOpen, onClose, userEmail }: Props) {
     try {
       const res = await fetch(`${BASE}/chat/send`, {
         method: 'POST',
-        headers: H,
-        body: JSON.stringify({ userEmail, text, sender: 'user' }),
+        headers: await getAuthHeaders(),
+        body: JSON.stringify({ text }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await fetchMessages(); // Sync with server (removes optimistic, gets real)
